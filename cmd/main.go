@@ -79,10 +79,21 @@ func main() {
 		targetDir = args[0]
 	}
 
-	configData, err := os.ReadFile("lx-config.yaml")
-	if err != nil {
-		log.Fatalf("lx-config.yaml 확인 필요: %v", err)
+	configPath := "lx-config.yaml"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			configPath = filepath.Join(home, "lx-config.yaml")
+		}
 	}
+
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Fatalf("설정 파일을 찾을 수 없습니다. (./lx-config.yaml 또는 ~/lx-config.yaml 확인 필요): %v", err)
+	}
+
+	fmt.Printf("설정 로드 완료: %s\n", configPath)
+
 	var config Config
 	yaml.Unmarshal(configData, &config)
 

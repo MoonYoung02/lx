@@ -1,0 +1,49 @@
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    binary: lx
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  disable: true
+
+brews:
+  - repository:
+      owner: chebread
+      name: homebrew-lx
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+    homepage: "https://github.com/chebread/lx"
+    description: ""
+    license: "AGPL-3.0"
+    directory: Formula
+
+    install: |
+      bin.install "lx"
+
+    test: |
+      system "#{bin}/lx --version"

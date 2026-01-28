@@ -23,8 +23,9 @@ jobs:
           go-version: "1.25"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
+          distribution: goreleaser # 이 줄을 추가하세요!
           version: latest
           args: release --clean
         env:

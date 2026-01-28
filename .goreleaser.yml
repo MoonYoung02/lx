@@ -10,16 +10,17 @@ builds:
     goarch:
       - amd64
       - arm64
+    main: ./cmd/main.go
     ldflags:
       - -s -w -X main.version={{.Version}}
     binary: lx
 
 archives:
-  - format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: ["tar.gz"]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
 
 checksum:
   name_template: "checksums.txt"

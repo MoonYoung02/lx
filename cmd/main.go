@@ -4,16 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"go/ast"
-	"go/format"
-	"go/parser"
-	"go/token"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_js "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
@@ -33,39 +34,226 @@ type GeminiClient struct {
 	model  string
 }
 
-func NewGeminiClient(apiKey string, model string) (*GeminiClient, error) {
-	ctx := context.Background()
-	cfg := &genai.ClientConfig{APIKey: apiKey}
-	client, err := genai.NewClient(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &GeminiClient{client: client, model: model}, nil
+type Replacement struct {
+	StartByte uint
+	EndByte   uint
+	Name      string
+	Params    string
+	Result    string
+	Prompt    string
 }
+
+type LanguageConfig struct {
+	Name     string
+	Language *sitter.Language
+	Query    string
+	Marker   string
+}
+
+const UniversalMarker = `(?i)lx\(['"]([^'"]+)['"]\)`
+
+var supportedLanguages = map[string]LanguageConfig{
+	".go": {
+		Name:     "Go",
+		Language: sitter.NewLanguage(tree_sitter_go.Language()),
+		Query: `(function_declaration
+					name: (identifier) @fn.name
+					parameters: (parameter_list) @fn.params
+					result: [
+						(type_identifier) (parameter_list) (pointer_type) (qualified_type)
+					]? @fn.result
+					body: (block) @fn.body) @entire`,
+		Marker: `lx\.Generate\(['"]([^'"]+)['"]\)`,
+	},
+	".js": {
+		Name:     "JavaScript",
+		Language: sitter.NewLanguage(tree_sitter_js.Language()),
+		Query: `(function_declaration
+					name: (identifier) @fn.name
+					parameters: (formal_parameters) @fn.params
+					body: (statement_block) @fn.body) @entire`,
+		Marker: `lx\.Generate\(['"]([^'"]+)['"]\)`,
+	},
+	".py": {
+		Name:     "Python",
+		Language: sitter.NewLanguage(tree_sitter_python.Language()),
+		Query: `(function_definition
+					name: (identifier) @fn.name
+					parameters: (parameters) @fn.params
+					body: (block) @fn.body) @entire`,
+		Marker: `lx\.Generate\(['"]([^'"]+)['"]\)`,
+	},
+}
+
+func processFile(path string, cfg LanguageConfig, ai LLMProvider) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	parser := sitter.NewParser()
+	parser.SetLanguage(cfg.Language)
+	tree := parser.Parse(content, nil)
+
+	query, qErr := sitter.NewQuery(cfg.Language, cfg.Query)
+	if qErr != nil {
+		return qErr
+	}
+
+	cursor := sitter.NewQueryCursor()
+	matches := cursor.Matches(query, tree.RootNode(), content)
+
+	var pending []Replacement
+
+	for {
+		m := matches.Next()
+		if m == nil {
+			break
+		}
+
+		var fnName, fnParams, fnResult, fnBody string
+		var entireStart, entireEnd uint
+
+		for i := range m.Captures {
+			cap := m.Captures[i]
+			name := query.CaptureNames()[cap.Index]
+			text := string(content[cap.Node.StartByte():cap.Node.EndByte()])
+
+			switch name {
+			case "entire":
+				entireStart = cap.Node.StartByte()
+				entireEnd = cap.Node.EndByte()
+			case "fn.name":
+				fnName = text
+			case "fn.params":
+				fnParams = text
+			case "fn.result":
+				fnResult = text
+			case "fn.body":
+				fnBody = text
+			}
+		}
+
+		prompt := extractPromptContent(fnBody, cfg)
+		if prompt != "" {
+			pending = append(pending, Replacement{
+				StartByte: entireStart,
+				EndByte:   entireEnd,
+				Name:      fnName,
+				Params:    fnParams,
+				Result:    fnResult,
+				Prompt:    prompt,
+			})
+		}
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	newContent := string(content)
+	ext := filepath.Ext(path)
+
+	for i := len(pending) - 1; i >= 0; i-- {
+		target := pending[i]
+		fmt.Printf("\t-> [%s] %s 함수 처리 중...\n", path, target.Name)
+
+		systemPrompt := buildSystemPrompt(target, cfg.Name)
+		generated, err := ai.GenerateCode(systemPrompt)
+		if err != nil {
+			log.Printf("[error] AI 에러: %v", err)
+			continue
+		}
+
+		replacementCode := cleanAICode(generated)
+		handleDependencies(replacementCode, path)
+		newContent = newContent[:target.StartByte] + replacementCode + newContent[target.EndByte:]
+	}
+
+	writeErr := os.WriteFile(path, []byte(newContent), 0644)
+	if writeErr == nil {
+		runPostProcess(path, ext)
+	}
+	return writeErr
+}
+
+func cleanAICode(code string) string {
+	// LLM 답변에서 불필요한 마크다운 태그만 제거
+	code = strings.TrimSpace(code)
+	re := regexp.MustCompile("(?s)```(?:[a-z]*)\n?(.*?)\n?```")
+	if match := re.FindStringSubmatch(code); len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	return code
+}
+
+func extractPromptContent(body string, langCfg LanguageConfig) string {
+	officialRe := regexp.MustCompile(langCfg.Marker)
+	if match := officialRe.FindStringSubmatch(body); len(match) > 1 {
+		return match[1]
+	}
+	universalRe := regexp.MustCompile(UniversalMarker)
+	if match := universalRe.FindStringSubmatch(body); len(match) > 1 {
+		return match[1]
+	}
+	return ""
+}
+
+func handleDependencies(code string, path string) {
+	re := regexp.MustCompile(`(?i)//\s*lx-dep:\s*([^\s\n]+)`)
+	matches := re.FindAllStringSubmatch(code, -1)
+	if len(matches) == 0 {
+		return
+	}
+	fmt.Printf("\n[%s] Dependency:\n", path)
+	fmt.Println(strings.Repeat("-", 40))
+	for _, m := range matches {
+		fmt.Printf("\t사용된 패키지: %s\n", m[1])
+	}
+	fmt.Println(strings.Repeat("-", 40))
+}
+
+func runPostProcess(path string, ext string) {
+	switch ext {
+	case ".go":
+		exec.Command("goimports", "-w", path).Run()
+		exec.Command("go", "mod", "tidy").Run()
+	case ".py":
+		if err := exec.Command("ruff", "format", path).Run(); err != nil {
+			exec.Command("black", path).Run()
+		}
+	}
+}
+
+func buildSystemPrompt(target Replacement, lang string) string {
+	sig := fmt.Sprintf("%s %s%s %s", lang, target.Name, target.Params, target.Result)
+
+	return fmt.Sprintf(`Implement ONLY this %s function: %s
+Task: %s
+- Code ONLY. No package/import/explanation.
+- If external libs, start with: // lx-dep: <name>`, lang, sig, target.Prompt)
+}
+
+// --- 5. AI 및 메인 로직 ---
 
 func (g *GeminiClient) GenerateCode(systemPrompt string) (string, error) {
 	resp, err := g.client.Models.GenerateContent(context.Background(), g.model, genai.Text(systemPrompt), nil)
 	if err != nil {
 		return "", err
 	}
-	code := resp.Text()
-	code = strings.TrimPrefix(code, "```go")
-	code = strings.TrimPrefix(code, "```")
-	code = strings.TrimSuffix(code, "```")
-	return strings.TrimSpace(code), nil
+	return resp.Text(), nil
+}
+
+func NewGeminiClient(apiKey, model string) (*GeminiClient, error) {
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{APIKey: apiKey})
+	return &GeminiClient{client: client, model: model}, err
 }
 
 var version = "dev"
 
 func main() {
 	var showVersion bool
-	flag.BoolVar(&showVersion, "version", false, "출력: 현재 버전")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: lx [options] [target_directory]\n\nOptions:\n")
-		flag.PrintDefaults()
-	}
-
+	flag.BoolVar(&showVersion, "version", false, "출력: 버전")
 	flag.Parse()
 
 	if showVersion {
@@ -74,198 +262,44 @@ func main() {
 	}
 
 	targetDir := "."
-	args := flag.Args()
-	if len(args) > 0 {
+	if args := flag.Args(); len(args) > 0 {
 		targetDir = args[0]
 	}
 
 	configPath := "lx-config.yaml"
+	location := "Project Local"
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			configPath = filepath.Join(home, "lx-config.yaml")
+			location = "Global (Home Dir)"
 		}
 	}
 
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
-		log.Fatalf("설정 파일을 찾을 수 없습니다. (./lx-config.yaml 또는 ~/lx-config.yaml 확인 필요): %v", err)
+		log.Fatalf("[error] 설정 에러: %v", err)
 	}
-
-	fmt.Printf("설정 로드 완료: %s\n", configPath)
 
 	var config Config
 	yaml.Unmarshal(configData, &config)
 
-	var ai LLMProvider
-	if config.Provider == "gemini" {
-		client, err := NewGeminiClient(config.ApiKey, config.Model)
-		if err != nil {
-			log.Fatalf("Gemini 초기화 실패: %v", err)
-		}
-		ai = client
-	}
+	fmt.Printf("[success] 설정 로드 완료: %s (%s)\n", configPath, location)
+	fmt.Printf("AI: [%s] / 모델: [%s]\n", config.Provider, config.Model)
+	fmt.Println(strings.Repeat("-", 50))
 
-	fmt.Printf("[%s] 분석 중...\n", targetDir)
+	ai, _ := NewGeminiClient(config.ApiKey, config.Model)
 
-	fset := token.NewFileSet()
-	err = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || !strings.HasSuffix(path, ".go") {
+	filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
 			return nil
 		}
-		processFile(fset, path, ai)
+		ext := filepath.Ext(path)
+		if cfg, ok := supportedLanguages[ext]; ok {
+			return processFile(path, cfg, ai)
+		}
 		return nil
 	})
 
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
-func processFile(fset *token.FileSet, filePath string, ai LLMProvider) {
-	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
-	if err != nil {
-		return
-	}
-
-	updated := false
-	for _, decl := range node.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-
-		var userPrompt string
-		for _, stmt := range fn.Body.List {
-			if expr, ok := stmt.(*ast.ExprStmt); ok {
-				if prompt := getLXPrompt(expr); prompt != "" {
-					userPrompt = prompt
-					break
-				}
-			}
-		}
-
-		if userPrompt != "" {
-			fmt.Printf("[%s] -> '%s' 처리 중...\n", filePath, fn.Name.Name)
-
-			systemPrompt := buildSystemPrompt(fn, userPrompt)
-			generatedCode, err := ai.GenerateCode(systemPrompt)
-			if err != nil {
-				log.Printf("AI 실패: %v", err)
-				continue
-			}
-
-			fn.Body = parseToPureBlock(generatedCode)
-			updated = true
-		}
-	}
-
-	if updated {
-		saveFile(filePath, node)
-	}
-}
-
-func parseToPureBlock(code string) *ast.BlockStmt {
-	code = strings.TrimSpace(code)
-
-	if strings.HasPrefix(code, "{") && strings.HasSuffix(code, "}") {
-		code = strings.TrimPrefix(code, "{")
-		code = strings.TrimSuffix(code, "}")
-	}
-
-	lines := strings.Split(code, "\n")
-	var bodyLines []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "import ") || strings.HasPrefix(trimmed, "import (") || trimmed == ")" {
-
-			continue
-		}
-		bodyLines = append(bodyLines, line)
-	}
-	pureBody := strings.Join(bodyLines, "\n")
-
-	dummyFile := "package main\nfunc dummy() {\n" + pureBody + "\n}"
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "", dummyFile, parser.ParseComments)
-	if err != nil {
-
-		log.Printf("AI 코드 파싱 에러: %v\n[시도했던 코드]:\n%s", err, dummyFile)
-		return nil
-	}
-
-	if len(f.Decls) > 0 {
-		return f.Decls[0].(*ast.FuncDecl).Body
-	}
-	return nil
-}
-
-func getLXPrompt(stmt *ast.ExprStmt) string {
-	call, ok := stmt.X.(*ast.CallExpr)
-	if !ok {
-		return ""
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return ""
-	}
-
-	if x, ok := sel.X.(*ast.Ident); ok && strings.ToLower(x.Name) == "lx" && sel.Sel.Name == "Generate" {
-		if len(call.Args) > 0 {
-			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				return strings.Trim(lit.Value, "\"")
-			}
-		}
-	}
-	return ""
-}
-
-func saveFile(filePath string, node *ast.File) {
-	f, err := os.Create(filePath)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	format.Node(f, token.NewFileSet(), node)
-	f.Close()
-
-	exec.Command("goimports", "-w", filePath).Run()
-}
-
-func buildSystemPrompt(fn *ast.FuncDecl, userPrompt string) string {
-	signature := fmt.Sprintf("func %s(%s) (%s)", fn.Name.Name, getFieldString(fn.Type.Params), getFieldString(fn.Type.Results))
-
-	const promptTemplate = `You are a Go expert. Implement the ENTIRE function body logic.
-RULES:
-1. Output ONLY the Go code logic that goes INSIDE the function curly braces.
-2. DO NOT include 'import' statements. If you need a package, just use it (e.g., time.Now()).
-3. DO NOT include the function signature or curly braces { }.
-4. Ensure the code is self-contained and matches the signature.
-
-Signature: %s
-Task: %s`
-
-	return fmt.Sprintf(promptTemplate, signature, userPrompt)
-}
-
-func getFieldString(fields *ast.FieldList) string {
-	if fields == nil {
-		return ""
-	}
-	var parts []string
-	for _, field := range fields.List {
-		typeName := ""
-		if t, ok := field.Type.(*ast.Ident); ok {
-			typeName = t.Name
-		}
-		if len(field.Names) > 0 {
-			for _, name := range field.Names {
-				parts = append(parts, fmt.Sprintf("%s %s", name.Name, typeName))
-			}
-		} else {
-			parts = append(parts, typeName)
-		}
-	}
-	return strings.Join(parts, ", ")
+	fmt.Println("\n[success] 모든 작업이 완료되었습니다.")
 }

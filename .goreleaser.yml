@@ -41,7 +41,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
     homepage: "https://github.com/chebread/lx"
-    description: "Interface by Human, Logic by AI. A vibe coding tool under developer control."
+    description: "Interface by Human, Logic by AI."
     license: "AGPL-3.0"
     directory: Formula
 

@@ -1,5 +1,7 @@
 # lx
 
+[[English](README.en.md)]
+
 > Interface by Human, Logic by AI.
 
 `lx`는 LLM 함수화 방식을 통해 코드의 통제권은 인간이, 구현의 번거로움은 LLM이 담당하는 새로운 프로그래밍 패러다임을 제공합니다.

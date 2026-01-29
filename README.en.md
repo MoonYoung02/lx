@@ -2,7 +2,7 @@
 
 [[한국어](README.md)]
 
-> Interface by Human, Logic by AI.
+> Interface by Programmer, Logic by AI.
 
 `lx` introduces a new programming paradigm where the developer controls the code structure while the LLM handles the implementation details via function encapsulation.
 

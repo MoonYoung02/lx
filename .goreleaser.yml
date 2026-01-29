@@ -1,10 +1,11 @@
 version: 2
 
+project_name: lx
+
 builds:
   - id: lx-build
     env:
       - CGO_ENABLED=1
-      - GOFLAGS=-p=1
 
     main: ./cmd/main.go
     binary: lx
@@ -21,38 +22,37 @@ builds:
       - amd64
       - arm64
 
-    # Windows ARM64는 Zig 크로스 컴파일이 까다로울 수 있어 일단 제외 (필요시 제거)
     ignore:
       - goos: windows
         goarch: arm64
 
-    # [핵심] Zig를 사용하여 CGO 크로스 컴파일 수행
+    # [핵심] Docker 내부의 진짜 컴파일러(GCC/Clang) 연결
     overrides:
       - goos: linux
         goarch: amd64
         env:
-          - CC=zig cc -target x86_64-linux-gnu
-          - CXX=zig c++ -target x86_64-linux-gnu
+          - CC=x86_64-linux-gnu-gcc
+          - CXX=x86_64-linux-gnu-g++
       - goos: linux
         goarch: arm64
         env:
-          - CC=zig cc -target aarch64-linux-gnu
-          - CXX=zig c++ -target aarch64-linux-gnu
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
       - goos: darwin
         goarch: amd64
         env:
-          - CC=zig cc -target x86_64-macos
-          - CXX=zig c++ -target x86_64-macos
+          - CC=o64-clang
+          - CXX=o64-clang++
       - goos: darwin
         goarch: arm64
         env:
-          - CC=zig cc -target aarch64-macos
-          - CXX=zig c++ -target aarch64-macos
+          - CC=oa64-clang
+          - CXX=oa64-clang++
       - goos: windows
         goarch: amd64
         env:
-          - CC=zig cc -target x86_64-windows-gnu
-          - CXX=zig c++ -target x86_64-windows-gnu
+          - CC=x86_64-w64-mingw32-gcc
+          - CXX=x86_64-w64-mingw32-g++
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"

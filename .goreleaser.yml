@@ -1,19 +1,57 @@
 version: 2
 
 builds:
-  - env:
-      - CGO_ENABLED=0
+  - id: lx-build
+    env:
+      - CGO_ENABLED=1
+
+    main: ./cmd/main.go
+    binary: lx
+
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
     goos:
       - linux
       - windows
       - darwin
+
     goarch:
       - amd64
       - arm64
-    main: ./cmd/main.go
-    ldflags:
-      - -s -w -X main.version={{.Version}}
-    binary: lx
+
+    # Windows ARM64는 Zig 크로스 컴파일이 까다로울 수 있어 일단 제외 (필요시 제거)
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+    # [핵심] Zig를 사용하여 CGO 크로스 컴파일 수행
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-linux-gnu
+          - CXX=zig c++ -target x86_64-linux-gnu
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=zig cc -target aarch64-linux-gnu
+          - CXX=zig c++ -target aarch64-linux-gnu
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-macos
+          - CXX=zig c++ -target x86_64-macos
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CC=zig cc -target aarch64-macos
+          - CXX=zig c++ -target aarch64-macos
+      - goos: windows
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-windows-gnu
+          - CXX=zig c++ -target x86_64-windows-gnu
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
@@ -39,7 +77,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
     homepage: "https://github.com/chebread/lx"
-    description: ""
+    description: "Interface by Human, Logic by AI. A vibe coding tool under developer control."
     license: "AGPL-3.0"
     directory: Formula
 

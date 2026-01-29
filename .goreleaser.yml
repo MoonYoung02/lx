@@ -4,6 +4,7 @@ builds:
   - id: lx-build
     env:
       - CGO_ENABLED=1
+      - GOFLAGS=-p=1
 
     main: ./cmd/main.go
     binary: lx

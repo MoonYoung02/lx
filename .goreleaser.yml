@@ -4,11 +4,29 @@ project_name: lx
 
 builds:
   - id: lx-build
-    env:
-      - CGO_ENABLED=1
-
     main: ./cmd/main.go
     binary: lx
+
+    env:
+      - CGO_ENABLED=1
+      - >-
+        CC=
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "amd64" -}}o64-clang{{- else -}}oa64-clang{{- end -}}
+        {{- else if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" -}}x86_64-w64-mingw32-gcc{{- end -}}
+        {{- else if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" -}}x86_64-linux-gnu-gcc{{- else if eq .Arch "arm64" -}}aarch64-linux-gnu-gcc{{- end -}}
+        {{- end -}}
+      - >-
+        CXX=
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "amd64" -}}o64-clang++{{- else -}}oa64-clang++{{- end -}}
+        {{- else if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" -}}x86_64-w64-mingw32-g++{{- end -}}
+        {{- else if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" -}}x86_64-linux-gnu-g++{{- else if eq .Arch "arm64" -}}aarch64-linux-gnu-g++{{- end -}}
+        {{- end -}}
 
     ldflags:
       - -s -w -X main.version={{.Version}}
@@ -25,34 +43,6 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
-
-    # [핵심] Docker 내부의 진짜 컴파일러(GCC/Clang) 연결
-    overrides:
-      - goos: linux
-        goarch: amd64
-        env:
-          - CC=x86_64-linux-gnu-gcc
-          - CXX=x86_64-linux-gnu-g++
-      - goos: linux
-        goarch: arm64
-        env:
-          - CC=aarch64-linux-gnu-gcc
-          - CXX=aarch64-linux-gnu-g++
-      - goos: darwin
-        goarch: amd64
-        env:
-          - CC=o64-clang
-          - CXX=o64-clang++
-      - goos: darwin
-        goarch: arm64
-        env:
-          - CC=oa64-clang
-          - CXX=oa64-clang++
-      - goos: windows
-        goarch: amd64
-        env:
-          - CC=x86_64-w64-mingw32-gcc
-          - CXX=x86_64-w64-mingw32-g++
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
@@ -78,7 +68,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
     homepage: "https://github.com/chebread/lx"
-    description: "Interface by Human, Logic by AI. A vibe coding tool under developer control."
+    description: "Interface by Human, Logic by AI."
     license: "AGPL-3.0"
     directory: Formula
 

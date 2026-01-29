@@ -9,47 +9,20 @@ builds:
 
     env:
       - CGO_ENABLED=1
-      - >-
-        CC=
-        {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "amd64" -}}o64-clang{{- else -}}oa64-clang{{- end -}}
-        {{- else if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" -}}x86_64-w64-mingw32-gcc{{- end -}}
-        {{- else if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" -}}x86_64-linux-gnu-gcc{{- else if eq .Arch "arm64" -}}aarch64-linux-gnu-gcc{{- end -}}
-        {{- end -}}
-      - >-
-        CXX=
-        {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "amd64" -}}o64-clang++{{- else -}}oa64-clang++{{- end -}}
-        {{- else if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" -}}x86_64-w64-mingw32-g++{{- end -}}
-        {{- else if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" -}}x86_64-linux-gnu-g++{{- else if eq .Arch "arm64" -}}aarch64-linux-gnu-g++{{- end -}}
-        {{- end -}}
 
     ldflags:
       - -s -w -X main.version={{.Version}}
 
     goos:
-      - linux
-      - windows
       - darwin
 
     goarch:
-      - amd64
-      - arm64
-
-    ignore:
-      - goos: windows
-        goarch: arm64
+      - amd64 # Intel Mac
+      - arm64 # Apple Silicon
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     formats: ["tar.gz"]
-    format_overrides:
-      - goos: windows
-        formats: ["zip"]
 
 checksum:
   name_template: "checksums.txt"
@@ -68,7 +41,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
     homepage: "https://github.com/chebread/lx"
-    description: "Interface by Human, Logic by AI."
+    description: "Interface by Human, Logic by AI. A vibe coding tool under developer control."
     license: "AGPL-3.0"
     directory: Formula
 

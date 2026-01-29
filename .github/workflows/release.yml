@@ -7,9 +7,11 @@ on:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+
     permissions:
       contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,17 +19,17 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Run GoReleaser (Cross)
-        run: |
-          docker run \
-            --rm \
-            -e GITHUB_TOKEN=$GITHUB_TOKEN \
-            -e HOMEBREW_TAP_GITHUB_TOKEN=$HOMEBREW_TAP_GITHUB_TOKEN \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v $PWD:/src \
-            -w /src \
-            ghcr.io/goreleaser/goreleaser-cross:v1.23 \
-            release --clean
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -177,11 +177,7 @@ brew tap chebread/lx
 brew install lx
 ```
 
-For other operating systems, install via the following method:
-
-1. Visit the [GitHub Releases](https://github.com/chebread/lx/releases) page.
-2. Download the file matching your OS and architecture.
-3. Unzip and add the `lx` executable to your system PATH environment variable.
+Other operating systems are not currently supported.
 
 ### Code Injection and Materialization
 
